@@ -1,0 +1,140 @@
+# P4 - NoSQL (MongoDB)
+>>> export sittings from PostgreSQL
+64802 pg_sittings.jsonl
+>>> scripts/01_create_collection.js
+collection created with validator
+BAD DOC 1: PASS - rejected (code 121)
+BAD DOC 2: PASS - rejected (code 121)
+>>> scripts/02_seed_mongo.js
+inserted 64802 documents; countDocuments = 64802
+{
+  seatingId: 1,
+  matric: 'EX/00650',
+  studentName: 'Kayode Balogun',
+  department: 'Economics',
+  level: 100,
+  needsAccessible: true,
+  courseCode: 'ACC 101',
+  courseTitle: 'Principles of Accounting',
+  examMode: 'CBT',
+  semester: '2023/2024-S1',
+  slotDate: ISODate('2023-11-16T00:00:00.000Z'),
+  period: 'AFTERNOON',
+  hall: 'CBT Lab Alpha',
+  seatCode: 'S001',
+  status: 'SAT'
+}
+>>> scripts/03_aggregations.js
+--- A1: attendance rate by department (SAT vs ABSENT) ---
+{
+  _id: 'Accounting',
+  total: 9600,
+  attendancePct: 96.98
+}
+{
+  _id: 'Business Administration',
+  total: 9600,
+  attendancePct: 96.98
+}
+{
+  _id: 'Computer Science',
+  total: 9600,
+  attendancePct: 96.98
+}
+{
+  _id: 'Cybersecurity',
+  total: 9600,
+  attendancePct: 96.98
+}
+{
+  _id: 'Economics',
+  total: 9600,
+  attendancePct: 96.98
+}
+{
+  _id: 'Mass Communication',
+  total: 9600,
+  attendancePct: 96.98
+}
+--- A2: sittings per hall per exam mode ---
+{
+  _id: {
+    hall: 'Main Auditorium',
+    mode: 'PAPER'
+  },
+  sittings: 32400
+}
+{
+  _id: {
+    hall: 'CBT Lab Alpha',
+    mode: 'CBT'
+  },
+  sittings: 14041
+}
+{
+  _id: {
+    hall: 'Hall B',
+    mode: 'PAPER'
+  },
+  sittings: 9720
+}
+{
+  _id: {
+    hall: 'CBT Lab Beta',
+    mode: 'CBT'
+  },
+  sittings: 7561
+}
+{
+  _id: {
+    hall: 'Hall C',
+    mode: 'PAPER'
+  },
+  sittings: 1080
+}
+--- A3: top 5 courses by absentees ---
+{
+  _id: {
+    code: 'ACC 301',
+    title: 'Auditing'
+  },
+  absent: 49
+}
+{
+  _id: {
+    code: 'ACC 302',
+    title: 'Corporate Finance'
+  },
+  absent: 49
+}
+{
+  _id: {
+    code: 'BUS 201',
+    title: 'Organisational Behaviour'
+  },
+  absent: 49
+}
+{
+  _id: {
+    code: 'BUS 202',
+    title: 'Marketing Management'
+  },
+  absent: 49
+}
+{
+  _id: {
+    code: 'CSC 201',
+    title: 'Data Structures'
+  },
+  absent: 49
+}
+>>> scripts/04_index_demo.js
+Label | Stage | Docs examined | Returned | Time ms
+student lookup BEFORE | COLLSCAN | 64802 | 54 | 23
+student lookup AFTER | IXSCAN | 54 | 54 | 1
+course absentees BEFORE | COLLSCAN | 64802 | 48 | 20
+course absentees AFTER | IXSCAN | 48 | 48 | 1
+hall + semester + period BEFORE | COLLSCAN | 64802 | 780 | 24
+hall + semester + period AFTER | IXSCAN | 780 | 780 | 1
+documents in collection: 64802
+# P4 done
