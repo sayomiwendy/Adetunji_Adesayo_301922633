@@ -1,0 +1,439 @@
+# P1 - Database Design: Miva Exam Seat Allocation
+NOTICE:  database "exam_db" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+ALTER DATABASE
+>>> schema/01_schema.sql
+DROP TABLE IF EXISTS seatings       CASCADE;
+psql:schema/01_schema.sql:4: NOTICE:  table "seatings" does not exist, skipping
+DROP TABLE
+DROP TABLE IF EXISTS exam_papers    CASCADE;
+psql:schema/01_schema.sql:5: NOTICE:  table "exam_papers" does not exist, skipping
+DROP TABLE
+DROP TABLE IF EXISTS exam_slots     CASCADE;
+psql:schema/01_schema.sql:6: NOTICE:  table "exam_slots" does not exist, skipping
+DROP TABLE
+DROP TABLE IF EXISTS registrations  CASCADE;
+psql:schema/01_schema.sql:7: NOTICE:  table "registrations" does not exist, skipping
+DROP TABLE
+DROP TABLE IF EXISTS students       CASCADE;
+psql:schema/01_schema.sql:8: NOTICE:  table "students" does not exist, skipping
+DROP TABLE
+DROP TABLE IF EXISTS courses        CASCADE;
+psql:schema/01_schema.sql:9: NOTICE:  table "courses" does not exist, skipping
+DROP TABLE
+DROP TABLE IF EXISTS seats          CASCADE;
+psql:schema/01_schema.sql:10: NOTICE:  table "seats" does not exist, skipping
+DROP TABLE
+DROP TABLE IF EXISTS exam_halls     CASCADE;
+psql:schema/01_schema.sql:11: NOTICE:  table "exam_halls" does not exist, skipping
+DROP TABLE
+CREATE TABLE exam_halls (
+    hall_id     SERIAL PRIMARY KEY,
+    hall_name   VARCHAR(80) NOT NULL UNIQUE,
+    building    VARCHAR(80) NOT NULL,
+    exam_mode   VARCHAR(5)  NOT NULL CHECK (exam_mode IN ('CBT','PAPER'))
+);
+CREATE TABLE
+CREATE TABLE seats (
+    seat_id       SERIAL PRIMARY KEY,
+    hall_id       INTEGER NOT NULL REFERENCES exam_halls(hall_id) ON DELETE CASCADE,
+    seat_code     VARCHAR(10) NOT NULL,
+    is_accessible BOOLEAN NOT NULL DEFAULT false,
+    UNIQUE (hall_id, seat_code)
+);
+CREATE TABLE
+CREATE TABLE courses (
+    course_code VARCHAR(10) PRIMARY KEY,
+    title       VARCHAR(120) NOT NULL,
+    department  VARCHAR(60)  NOT NULL,
+    exam_mode   VARCHAR(5)   NOT NULL CHECK (exam_mode IN ('CBT','PAPER')),
+    timetable_no SMALLINT    NOT NULL UNIQUE,   -- position in the exam timetable plan
+    CONSTRAINT chk_course_code CHECK (course_code ~ '^[A-Z]{3} [0-9]{3}$')
+);
+CREATE TABLE
+CREATE TABLE students (
+    student_id        SERIAL PRIMARY KEY,
+    matric_number     VARCHAR(20)  NOT NULL UNIQUE,
+    full_name         VARCHAR(120) NOT NULL,
+    email             VARCHAR(120) NOT NULL UNIQUE,
+    department        VARCHAR(60)  NOT NULL,
+    level             INTEGER      NOT NULL CHECK (level IN (100,200,300,400)),
+    needs_accessible  BOOLEAN      NOT NULL DEFAULT false
+);
+CREATE TABLE
+CREATE TABLE registrations (
+    student_id  INTEGER NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+    course_code VARCHAR(10) NOT NULL REFERENCES courses(course_code),
+    semester    VARCHAR(12) NOT NULL,
+    PRIMARY KEY (student_id, course_code, semester),
+    CONSTRAINT chk_reg_semester CHECK (semester ~ '^\d{4}/\d{4}-S[12]$')
+);
+CREATE TABLE
+CREATE TABLE exam_slots (
+    slot_id   SERIAL PRIMARY KEY,
+    semester  VARCHAR(12) NOT NULL,
+    slot_date DATE        NOT NULL,
+    period    VARCHAR(9)  NOT NULL CHECK (period IN ('MORNING','AFTERNOON')),
+    UNIQUE (slot_date, period),
+    CONSTRAINT chk_slot_semester CHECK (semester ~ '^\d{4}/\d{4}-S[12]$')
+);
+CREATE TABLE
+CREATE TABLE exam_papers (
+    paper_id    SERIAL PRIMARY KEY,
+    course_code VARCHAR(10) NOT NULL REFERENCES courses(course_code),
+    slot_id     INTEGER     NOT NULL REFERENCES exam_slots(slot_id),
+    UNIQUE (course_code, slot_id),
+    UNIQUE (paper_id, slot_id)          -- lets seatings carry slot_id with a real FK
+);
+CREATE TABLE
+CREATE TABLE seatings (
+    seating_id   BIGSERIAL PRIMARY KEY,
+    student_id   INTEGER NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+    seat_id      INTEGER NOT NULL REFERENCES seats(seat_id),
+    paper_id     INTEGER NOT NULL,
+    slot_id      INTEGER NOT NULL,
+    status       VARCHAR(10) NOT NULL DEFAULT 'ASSIGNED'
+                 CHECK (status IN ('ASSIGNED','SAT','ABSENT','CANCELLED')),
+    assigned_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    cancelled_at TIMESTAMPTZ,
+    FOREIGN KEY (paper_id, slot_id) REFERENCES exam_papers(paper_id, slot_id),
+    CONSTRAINT chk_cancel_invariant CHECK ((status = 'CANCELLED') = (cancelled_at IS NOT NULL))
+);
+CREATE TABLE
+CREATE UNIQUE INDEX uniq_active_seat_per_slot
+    ON seatings (seat_id, slot_id)    WHERE status IN ('ASSIGNED','SAT');
+CREATE INDEX
+CREATE UNIQUE INDEX uniq_active_student_per_slot
+    ON seatings (student_id, slot_id) WHERE status IN ('ASSIGNED','SAT');
+CREATE INDEX
+COMMENT ON TABLE seatings IS 'Student <-> seat <-> exam paper. Active rows are ASSIGNED or SAT.';
+COMMENT
+>>> schema/02_triggers.sql
+CREATE OR REPLACE FUNCTION trg_fn_seating_rules() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_course   VARCHAR(10);
+    v_semester VARCHAR(12);
+    v_cmode    VARCHAR(5);
+    v_hmode    VARCHAR(5);
+    v_access   BOOLEAN;
+    v_needs    BOOLEAN;
+BEGIN
+    IF NEW.status NOT IN ('ASSIGNED','SAT') THEN
+        RETURN NEW;                       -- history rows are not re-validated
+    END IF;
+
+    SELECT p.course_code, sl.semester, c.exam_mode
+      INTO v_course, v_semester, v_cmode
+    FROM exam_papers p
+    JOIN exam_slots sl ON sl.slot_id = p.slot_id
+    JOIN courses c     ON c.course_code = p.course_code
+    WHERE p.paper_id = NEW.paper_id;
+
+    SELECT h.exam_mode, s.is_accessible INTO v_hmode, v_access
+    FROM seats s JOIN exam_halls h ON h.hall_id = s.hall_id
+    WHERE s.seat_id = NEW.seat_id;
+
+    SELECT needs_accessible INTO v_needs FROM students WHERE student_id = NEW.student_id;
+
+    IF v_hmode IS NULL OR v_needs IS NULL OR v_course IS NULL THEN
+        RAISE EXCEPTION 'Unknown seat, student or paper (seat %, student %, paper %)',
+            NEW.seat_id, NEW.student_id, NEW.paper_id USING ERRCODE = 'foreign_key_violation';
+    END IF;
+
+    IF v_hmode <> v_cmode THEN
+        RAISE EXCEPTION 'Mode mismatch: % is a % paper but seat % is in a % hall',
+            v_course, v_cmode, NEW.seat_id, v_hmode USING ERRCODE = 'check_violation';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM registrations r
+                   WHERE r.student_id = NEW.student_id
+                     AND r.course_code = v_course AND r.semester = v_semester) THEN
+        RAISE EXCEPTION 'Student % is not registered for % in %',
+            NEW.student_id, v_course, v_semester USING ERRCODE = 'check_violation';
+    END IF;
+
+    IF v_needs AND NOT v_access THEN
+        RAISE EXCEPTION 'Student % needs an accessible seat but seat % is not accessible',
+            NEW.student_id, NEW.seat_id USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE FUNCTION
+DROP TRIGGER IF EXISTS trg_seating_rules ON seatings;
+psql:schema/02_triggers.sql:58: NOTICE:  trigger "trg_seating_rules" for relation "seatings" does not exist, skipping
+DROP TRIGGER
+CREATE TRIGGER trg_seating_rules
+BEFORE INSERT OR UPDATE OF student_id, seat_id, paper_id, status ON seatings
+FOR EACH ROW EXECUTE FUNCTION trg_fn_seating_rules();
+CREATE TRIGGER
+CREATE OR REPLACE FUNCTION trg_fn_one_seat_per_slot() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.status IN ('ASSIGNED','SAT') THEN
+        IF EXISTS (SELECT 1 FROM seatings a WHERE a.seat_id = NEW.seat_id AND a.slot_id = NEW.slot_id
+                   AND a.status IN ('ASSIGNED','SAT') AND a.seating_id <> COALESCE(NEW.seating_id,-1)) THEN
+            RAISE EXCEPTION 'Seat % is already taken in slot %', NEW.seat_id, NEW.slot_id
+                USING ERRCODE = 'unique_violation';
+        END IF;
+        IF EXISTS (SELECT 1 FROM seatings a WHERE a.student_id = NEW.student_id AND a.slot_id = NEW.slot_id
+                   AND a.status IN ('ASSIGNED','SAT') AND a.seating_id <> COALESCE(NEW.seating_id,-1)) THEN
+            RAISE EXCEPTION 'Student % already has a paper in slot % (clash)', NEW.student_id, NEW.slot_id
+                USING ERRCODE = 'unique_violation';
+        END IF;
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE FUNCTION
+DROP TRIGGER IF EXISTS trg_one_seat_per_slot ON seatings;
+psql:schema/02_triggers.sql:82: NOTICE:  trigger "trg_one_seat_per_slot" for relation "seatings" does not exist, skipping
+DROP TRIGGER
+CREATE TRIGGER trg_one_seat_per_slot
+BEFORE INSERT OR UPDATE OF student_id, seat_id, slot_id, status ON seatings
+FOR EACH ROW EXECUTE FUNCTION trg_fn_one_seat_per_slot();
+CREATE TRIGGER
+SELECT tgname AS trigger_name FROM pg_trigger
+WHERE tgrelid = 'seatings'::regclass AND NOT tgisinternal ORDER BY 1;
+     trigger_name      
+-----------------------
+ trg_one_seat_per_slot
+ trg_seating_rules
+(2 rows)
+
+>>> seed/03_seed.sql
+INSERT INTO exam_halls (hall_name, building, exam_mode) VALUES
+    ('CBT Lab Alpha',   'ICT Centre',          'CBT'),
+    ('CBT Lab Beta',    'ICT Centre',          'CBT'),
+    ('Main Auditorium', 'Admin Block',         'PAPER'),
+    ('Hall B',          'Faculty of Science',  'PAPER'),
+    ('Hall C',          'Faculty of Arts',     'PAPER');
+INSERT 0 5
+INSERT INTO seats (hall_id, seat_code, is_accessible)
+SELECT h.hall_id, 'S' || LPAD(g::text, 3, '0'), g <= 10
+FROM exam_halls h
+JOIN LATERAL generate_series(1, CASE h.hall_name WHEN 'Main Auditorium' THEN 300
+                                                   WHEN 'Hall B' THEN 150 WHEN 'Hall C' THEN 150
+                                                   ELSE 130 END) g ON true;
+INSERT 0 860
+INSERT INTO courses (course_code, title, department, exam_mode, timetable_no)
+SELECT code, title, dept, CASE WHEN n <= 12 THEN 'CBT' ELSE 'PAPER' END, n
+FROM (VALUES
+ (1,'CSC 101','Introduction to Computer Science','Computer Science'),
+ (2,'ACC 101','Principles of Accounting','Accounting'),
+ (3,'ECO 101','Introductory Economics','Economics'),
+ (4,'BUS 101','Introduction to Business','Business Administration'),
+ (5,'MAC 101','Introduction to Mass Communication','Mass Communication'),
+ (6,'CYB 101','Introduction to Cybersecurity','Cybersecurity'),
+ (7,'CSC 102','Programming in Python','Computer Science'),
+ (8,'ACC 102','Financial Accounting I','Accounting'),
+ (9,'ECO 102','Microeconomics','Economics'),
+ (10,'BUS 102','Business Mathematics','Business Administration'),
+ (11,'MAC 102','Media Writing','Mass Communication'),
+ (12,'CYB 102','Computer Networks Basics','Cybersecurity'),
+ (13,'CSC 201','Data Structures','Computer Science'),
+ (14,'ACC 201','Cost Accounting','Accounting'),
+ (15,'ECO 201','Macroeconomics','Economics'),
+ (16,'BUS 201','Organisational Behaviour','Business Administration'),
+ (17,'MAC 201','Broadcast Journalism','Mass Communication'),
+ (18,'CYB 201','Network Security','Cybersecurity'),
+ (19,'CSC 202','Database Systems','Computer Science'),
+ (20,'ACC 202','Taxation','Accounting'),
+ (21,'ECO 202','Development Economics','Economics'),
+ (22,'BUS 202','Marketing Management','Business Administration'),
+ (23,'MAC 202','Public Relations','Mass Communication'),
+ (24,'CYB 202','Ethical Hacking','Cybersecurity'),
+ (25,'CSC 301','Operating Systems','Computer Science'),
+ (26,'ACC 301','Auditing','Accounting'),
+ (27,'ECO 301','Econometrics','Economics'),
+ (28,'BUS 301','Strategic Management','Business Administration'),
+ (29,'MAC 301','Media Law and Ethics','Mass Communication'),
+ (30,'CYB 301','Digital Forensics','Cybersecurity'),
+ (31,'CSC 302','Software Engineering','Computer Science'),
+ (32,'ACC 302','Corporate Finance','Accounting'),
+ (33,'ECO 302','Public Finance','Economics'),
+ (34,'BUS 302','Entrepreneurship','Business Administration'),
+ (35,'MAC 302','Digital Media Production','Mass Communication'),
+ (36,'CYB 302','Cloud Security','Cybersecurity')
+) AS v(n, code, title, dept);
+INSERT 0 36
+WITH f AS (SELECT ARRAY['Chinedu','Aisha','Tunde','Ngozi','Emeka','Fatima','Segun','Blessing','Ibrahim','Chiamaka',
+  'Olumide','Zainab','Kelechi','Yewande','Uche','Hauwa','Babatunde','Amaka','Musa','Folake',
+  'Obinna','Halima','Damilola','Ifeoma','Sani','Temitope','Nnamdi','Bukola','Abubakar','Chioma',
+  'Kayode','Rukayat','Ikenna','Adaeze','Gbenga','Mariam','Tochukwu','Oluwaseun','Yusuf','Nneka'] AS a),
+l AS (SELECT ARRAY['Okafor','Bello','Adeyemi','Eze','Danjuma','Okonkwo','Balogun','Nwosu','Abdullahi','Ogunleye',
+  'Ibe','Salisu','Afolabi','Chukwu','Lawal','Obi','Adebayo','Garba','Onyeama','Fashola',
+  'Umeh','Yakubu','Ajayi','Nwachukwu','Suleiman','Olawale','Anyanwu','Mohammed','Ogundipe','Ezekwesili',
+  'Akpan','Ibrahim','Oladipo','Nnaji','Hassan','Adewale','Okoro','Usman','Ojo','Egbuna'] AS a)
+INSERT INTO students (matric_number, full_name, email, department, level, needs_accessible)
+SELECT 'EX/' || LPAD(g::text, 5, '0'),
+       f.a[1 + (g*3) % 40] || ' ' || l.a[1 + (g/3 + g*11) % 40],
+       lower(f.a[1 + (g*3) % 40] || '.' || l.a[1 + (g/3 + g*11) % 40]) || g || '@student.miva.edu.ng',
+       (ARRAY['Computer Science','Accounting','Economics','Business Administration','Mass Communication','Cybersecurity'])[1 + g % 6],
+       100 * (1 + (g/6) % 4),
+       g % 50 = 0
+FROM generate_series(1, 1200) g, f, l;
+INSERT 0 1200
+INSERT INTO exam_slots (semester, slot_date, period)
+SELECT semester, slot_date, period FROM (
+SELECT s.semester, s.start_date + d AS slot_date, p AS period
+FROM (VALUES
+  (0,'2022/2023-S1'),(1,'2022/2023-S2'),(2,'2023/2024-S1'),(3,'2023/2024-S2'),
+  (4,'2024/2025-S1'),(5,'2024/2025-S2'),(6,'2025/2026-S1'),(7,'2025/2026-S2')
+) AS h(q, semester)
+CROSS JOIN LATERAL (SELECT h.semester, (CURRENT_DATE - (8 - h.q) * 182) AS start_date) s
+CROSS JOIN generate_series(0, 5) d
+CROSS JOIN (VALUES ('MORNING'),('AFTERNOON')) AS pp(p)
+UNION ALL
+SELECT '2026/2027-S1', CURRENT_DATE + 1 + d, p
+FROM generate_series(0, 5) d CROSS JOIN (VALUES ('MORNING'),('AFTERNOON')) AS pp(p)
+) x ORDER BY slot_date, period DESC;
+INSERT 0 108
+INSERT INTO exam_papers (course_code, slot_id)
+SELECT c.course_code, sl.slot_id
+FROM (SELECT slot_id,
+             ROW_NUMBER() OVER (PARTITION BY semester ORDER BY slot_date, period DESC) - 1 AS k
+      FROM exam_slots) sl
+JOIN courses c ON (c.timetable_no - 1) % 12 = sl.k;
+INSERT 0 324
+INSERT INTO registrations (student_id, course_code, semester)
+SELECT st.student_id, c.course_code, sem.semester
+FROM (SELECT student_id, ROW_NUMBER() OVER (ORDER BY student_id) - 1 AS s FROM students) st
+CROSS JOIN (SELECT DISTINCT semester FROM exam_slots) sem
+CROSS JOIN generate_series(0, 5) j
+JOIN courses c ON c.timetable_no - 1 = ((st.s % 12 + 2 * j) % 12) + 12 * ((st.s / 12 + j) % 3);
+INSERT 0 64800
+SELECT 'exam_halls' AS table_name, COUNT(*) FROM exam_halls
+UNION ALL SELECT 'seats', COUNT(*) FROM seats
+UNION ALL SELECT 'courses', COUNT(*) FROM courses
+UNION ALL SELECT 'students', COUNT(*) FROM students
+UNION ALL SELECT 'exam_slots', COUNT(*) FROM exam_slots
+UNION ALL SELECT 'exam_papers', COUNT(*) FROM exam_papers
+UNION ALL SELECT 'registrations', COUNT(*) FROM registrations ORDER BY 1;
+  table_name   | count 
+---------------+-------
+ courses       |    36
+ exam_halls    |     5
+ exam_papers   |   324
+ exam_slots    |   108
+ registrations | 64800
+ seats         |   860
+ students      |  1200
+(7 rows)
+
+>>> seed/04_bulk_generate.sql
+ALTER TABLE seatings DISABLE TRIGGER USER;
+ALTER TABLE
+INSERT INTO seatings (student_id, seat_id, paper_id, slot_id, status, assigned_at, cancelled_at)
+WITH reg AS (
+    SELECT r.student_id, st.needs_accessible, p.paper_id, p.slot_id, c.exam_mode, sl.slot_date,
+           ROW_NUMBER() OVER (PARTITION BY p.slot_id, c.exam_mode
+                              ORDER BY st.needs_accessible DESC, r.student_id) AS rk
+    FROM registrations r
+    JOIN students    st ON st.student_id = r.student_id
+    JOIN courses     c  ON c.course_code = r.course_code
+    JOIN exam_slots  sl ON sl.semester = r.semester
+    JOIN exam_papers p  ON p.course_code = r.course_code AND p.slot_id = sl.slot_id
+), sk AS (
+    SELECT s.seat_id, h.exam_mode,
+           ROW_NUMBER() OVER (PARTITION BY h.exam_mode ORDER BY s.is_accessible DESC, s.seat_id) AS rk
+    FROM seats s JOIN exam_halls h ON h.hall_id = s.hall_id
+)
+SELECT reg.student_id, sk.seat_id, reg.paper_id, reg.slot_id,
+       CASE WHEN reg.slot_date >= CURRENT_DATE THEN 'ASSIGNED'
+            WHEN (reg.student_id + reg.slot_id) % 33 = 0 THEN 'ABSENT'
+            ELSE 'SAT' END,
+       ((reg.slot_date - 14)::timestamp + ((reg.student_id * 7) % 600) * interval '1 minute')
+           AT TIME ZONE 'Africa/Lagos',
+       NULL
+FROM reg JOIN sk ON sk.exam_mode = reg.exam_mode AND sk.rk = reg.rk;
+INSERT 0 64800
+ALTER TABLE seatings ENABLE TRIGGER USER;
+ALTER TABLE
+SELECT 'TOTAL SEATINGS' AS metric, COUNT(*)::text AS value FROM seatings
+UNION ALL SELECT 'registrations (must equal seatings)', COUNT(*)::text FROM registrations
+UNION ALL SELECT status, COUNT(*)::text FROM seatings GROUP BY status
+UNION ALL SELECT 'future slots with ASSIGNED seats',
+       COUNT(DISTINCT s.slot_id)::text FROM seatings s WHERE s.status = 'ASSIGNED';
+               metric                | value 
+-------------------------------------+-------
+ TOTAL SEATINGS                      | 64800
+ registrations (must equal seatings) | 64800
+ SAT                                 | 55860
+ ABSENT                              | 1740
+ ASSIGNED                            | 7200
+ future slots with ASSIGNED seats    | 12
+(6 rows)
+
+SELECT 'mode mismatch' AS audit, COUNT(*) AS violations
+FROM seatings a JOIN seats s ON s.seat_id = a.seat_id JOIN exam_halls h ON h.hall_id = s.hall_id
+JOIN exam_papers p ON p.paper_id = a.paper_id JOIN courses c ON c.course_code = p.course_code
+WHERE h.exam_mode <> c.exam_mode
+UNION ALL
+SELECT 'not registered', COUNT(*)
+FROM seatings a JOIN exam_papers p ON p.paper_id = a.paper_id JOIN exam_slots sl ON sl.slot_id = a.slot_id
+WHERE NOT EXISTS (SELECT 1 FROM registrations r WHERE r.student_id = a.student_id
+                  AND r.course_code = p.course_code AND r.semester = sl.semester)
+UNION ALL
+SELECT 'needs accessible but not accessible seat', COUNT(*)
+FROM seatings a JOIN students st ON st.student_id = a.student_id JOIN seats s ON s.seat_id = a.seat_id
+WHERE st.needs_accessible AND NOT s.is_accessible;
+                  audit                   | violations 
+------------------------------------------+------------
+ needs accessible but not accessible seat |          0
+ mode mismatch                            |          0
+ not registered                           |          0
+(3 rows)
+
+>>> tests/05_constraint_tests.sql (8 tests, 7 must be rejected, 1 control must succeed)
+CREATE FUNCTION
+CREATE FUNCTION
+--- T1 seat already taken in the slot (partial UNIQUE / trigger) ---
+                                expect_fail                                
+---------------------------------------------------------------------------
+ PASS  T1 two students on one seat  ->  Seat 1 is already taken in slot 97
+(1 row)
+
+--- T2 same student, two seats in one slot (clash) ---
+                                       expect_fail                                        
+------------------------------------------------------------------------------------------
+ PASS  T2 student clash in one slot  ->  Student 1 already has a paper in slot 97 (clash)
+(1 row)
+
+--- T3 CBT paper placed in a paper hall (mode rule) ---
+                                            expect_fail                                            
+---------------------------------------------------------------------------------------------------
+ PASS  T3 mode mismatch  ->  Mode mismatch: CSC 101 is a CBT paper but seat 651 is in a PAPER hall
+(1 row)
+
+--- T4 student not registered for the course ---
+                                     expect_fail                                      
+--------------------------------------------------------------------------------------
+ PASS  T4 not registered  ->  Student 2 is not registered for CSC 101 in 2026/2027-S1
+(1 row)
+
+--- T5 accessible-seat student on an ordinary seat ---
+                                               expect_fail                                                
+----------------------------------------------------------------------------------------------------------
+ PASS  T5 accessible seat needed  ->  Student 650 needs an accessible seat but seat 201 is not accessible
+(1 row)
+
+--- T6 CANCELLED without cancelled_at (CHECK) ---
+                                                   expect_fail                                                   
+-----------------------------------------------------------------------------------------------------------------
+ PASS  T6 cancel invariant  ->  new row for relation "seatings" violates check constraint "chk_cancel_invariant"
+(1 row)
+
+--- T7 bad semester format (CHECK) ---
+                                                  expect_fail                                                  
+---------------------------------------------------------------------------------------------------------------
+ PASS  T7 semester format  ->  new row for relation "exam_slots" violates check constraint "chk_slot_semester"
+(1 row)
+
+--- T8 CONTROL: a valid re-seating must SUCCEED ---
+                        expect_ok                         
+----------------------------------------------------------
+ PASS  T8 valid seating accepted  ->  statement succeeded
+(1 row)
+
+# P1 done
