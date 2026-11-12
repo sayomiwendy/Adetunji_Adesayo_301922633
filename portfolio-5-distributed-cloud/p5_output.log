@@ -1,0 +1,142 @@
+# P5 - Distributed databases and cloud
+>>> [1/3] partitioning
+=== BEFORE (single table): one semester, slot_id 73 .. 84 ===
+                                         QUERY PLAN                                          
+---------------------------------------------------------------------------------------------
+ HashAggregate (actual time=3.221..3.223 rows=2 loops=1)
+   Group Key: status
+   Batches: 1  Memory Usage: 24kB
+   ->  Bitmap Heap Scan on seatings (actual time=0.338..2.257 rows=7200 loops=1)
+         Recheck Cond: ((slot_id >= 73) AND (slot_id <= 84))
+         Heap Blocks: exact=548
+         ->  Bitmap Index Scan on idx_seat_slot (actual time=0.263..0.263 rows=7200 loops=1)
+               Index Cond: ((slot_id >= 73) AND (slot_id <= 84))
+ Planning Time: 0.313 ms
+ Execution Time: 3.259 ms
+(10 rows)
+
+CREATE TABLE
+CREATE INDEX
+CREATE INDEX
+DO
+CREATE TABLE
+INSERT 0 64802
+ setval 
+--------
+  64835
+(1 row)
+
+old rows 64802  new rows 64802  rows in DEFAULT partition 0 (must be 0)
+BEGIN
+DROP TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER INDEX
+ALTER INDEX
+CREATE TRIGGER
+CREATE TRIGGER
+COMMIT
+ANALYZE
+=== Rows per partition ===
+       partition       |             bounds              | row_count 
+-----------------------+---------------------------------+-----------
+ seatings_2022_2023_s1 | FOR VALUES FROM (1) TO (13)     |      7200
+ seatings_2022_2023_s2 | FOR VALUES FROM (13) TO (25)    |      7200
+ seatings_2023_2024_s1 | FOR VALUES FROM (25) TO (37)    |      7200
+ seatings_2023_2024_s2 | FOR VALUES FROM (37) TO (49)    |      7200
+ seatings_2024_2025_s1 | FOR VALUES FROM (49) TO (61)    |      7200
+ seatings_2024_2025_s2 | FOR VALUES FROM (61) TO (73)    |      7200
+ seatings_2025_2026_s1 | FOR VALUES FROM (73) TO (85)    |      7200
+ seatings_2025_2026_s2 | FOR VALUES FROM (85) TO (97)    |      7200
+ seatings_2026_2027_s1 | FOR VALUES FROM (97) TO (109)   |      7202
+ seatings_default      | DEFAULT                         |         0
+ seatings_next         | FOR VALUES FROM (109) TO (1109) |         0
+(11 rows)
+
+=== AFTER (partitioned): same one-semester query - only one partition is read ===
+                                          QUERY PLAN                                           
+-----------------------------------------------------------------------------------------------
+ HashAggregate (actual time=1.499..1.500 rows=2 loops=1)
+   Group Key: seatings.status
+   Batches: 1  Memory Usage: 24kB
+   ->  Seq Scan on seatings_2025_2026_s1 seatings (actual time=0.005..0.733 rows=7200 loops=1)
+         Filter: ((slot_id >= 73) AND (slot_id <= 84))
+ Planning Time: 0.262 ms
+ Execution Time: 1.513 ms
+(7 rows)
+
+=== P1 rules still enforced on the partitioned table (triggers) ===
+     trigger_name      
+-----------------------
+ trg_one_seat_per_slot
+ trg_seating_rules
+(2 rows)
+
+          indexname           
+------------------------------
+ uniq_active_seat_per_slot
+ uniq_active_student_per_slot
+(2 rows)
+
+=== Maintenance demo: detach and re-attach the oldest semester (archiving without DELETE) ===
+ rows_before_detach 
+--------------------
+              64802
+(1 row)
+
+ALTER TABLE
+ rows_after_detach 
+-------------------
+             57602
+(1 row)
+
+ rows_in_detached_table 
+------------------------
+                   7200
+(1 row)
+
+ALTER TABLE
+ rows_after_reattach 
+---------------------
+               64802
+(1 row)
+
+>>> [2/3] streaming replica
+waiting for server to start.... done
+server started
+replica started
+>>> [3/3] replication demo (primary 5432, replica 55432)
+=== 1. Who is who ===
+primary : port 5432, in recovery = f
+replica : port 55432, in recovery = t
+
+=== 2. A write on the REPLICA must be rejected ===
+ERROR:  cannot execute INSERT in a read-only transaction
+
+=== 3. Insert on the PRIMARY ===
+INSERT 0 1
+primary count of that hall: 1
+
+=== 4. The row arrives on the REPLICA ===
+replica count of that hall: 1 (after ~1 s)
+
+=== 5. Replication status (primary side) ===
+ application_name |   state   | sync_state | sent_lsn  | replay_lsn | caught_up 
+------------------+-----------+------------+-----------+------------+-----------
+ walreceiver      | streaming | async      | 0/7002190 | 0/7002190  | t
+(1 row)
+
+=== replica side ===
+ replayed_up_to | in_recovery 
+----------------+-------------
+ 0/7002190      | t
+(1 row)
+
+
+=== 6. Same data on both: seatings count ===
+primary: 64802   replica: 64802
+
+=== 7. Clean up the test row (delete on primary, check replica) ===
+DELETE 1
+replica count after delete: 0
+# P5 done. Evidence: partition_output.log and replication_output.log

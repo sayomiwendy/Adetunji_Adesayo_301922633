@@ -1,0 +1,36 @@
+waiting for server to start.... done
+server started
+replica started
+=== 1. Who is who ===
+primary : port 5432, in recovery = f
+replica : port 55432, in recovery = t
+
+=== 2. A write on the REPLICA must be rejected ===
+ERROR:  cannot execute INSERT in a read-only transaction
+
+=== 3. Insert on the PRIMARY ===
+INSERT 0 1
+primary count of that hall: 1
+
+=== 4. The row arrives on the REPLICA ===
+replica count of that hall: 1 (after ~1 s)
+
+=== 5. Replication status (primary side) ===
+ application_name |   state   | sync_state | sent_lsn  | replay_lsn | caught_up 
+------------------+-----------+------------+-----------+------------+-----------
+ walreceiver      | streaming | async      | 0/7002190 | 0/7002190  | t
+(1 row)
+
+=== replica side ===
+ replayed_up_to | in_recovery 
+----------------+-------------
+ 0/7002190      | t
+(1 row)
+
+
+=== 6. Same data on both: seatings count ===
+primary: 64802   replica: 64802
+
+=== 7. Clean up the test row (delete on primary, check replica) ===
+DELETE 1
+replica count after delete: 0
