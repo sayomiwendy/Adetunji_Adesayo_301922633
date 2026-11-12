@@ -1,0 +1,112 @@
+# P3 - Transactions and Concurrency
+>>> [1/3] functions
+CREATE FUNCTION
+CREATE FUNCTION
+  function_name  
+-----------------
+ cancel_seating
+ seat_first_free
+(2 rows)
+
+>>> [2/3] COMMIT / ROLLBACK
+=== BEFORE: the student holds seat 1
+ seating_id | seat_id |  status  
+------------+---------+----------
+         94 |       1 | ASSIGNED
+(1 row)
+
+=== Test A: move to a seat in the WRONG kind of hall -> error -> ROLLBACK ===
+BEGIN
+UPDATE 1
+psql:sql/02_commit_rollback.sql:23: ERROR:  Mode mismatch: CSC 101 is a CBT paper but seat 651 is in a PAPER hall
+CONTEXT:  PL/pgSQL function trg_fn_seating_rules() line 33 at RAISE
+ROLLBACK
+=== AFTER rollback: old seating is still there (nothing half-done) ===
+ seating_id | seat_id |  status  
+------------+---------+----------
+         94 |       1 | ASSIGNED
+(1 row)
+
+=== Test B: move to a valid free seat -> COMMIT ===
+BEGIN
+UPDATE 1
+INSERT 0 1
+COMMIT
+=== AFTER commit: new seat is active, old row is CANCELLED ===
+ seating_id | seat_id |  status   
+------------+---------+-----------
+         94 |       1 | CANCELLED
+      64808 |     201 | ASSIGNED
+(2 rows)
+
+=== clean-up: put the student back on the original seat ===
+BEGIN
+UPDATE 1
+INSERT 0 1
+COMMIT
+ seating_id | seat_id |  status  
+------------+---------+----------
+      64809 |       1 | ASSIGNED
+(1 row)
+
+>>> [3/3] six concurrency demos (two real sessions)
+Test students: U1=61 (seat 711), U2=63 (seat 712); slot=97; mode=PAPER
+
+========================================================================
+PART 1: BUG - check-then-insert with no lock and no UNIQUE guard (scratch table)
+========================================================================
+student 61 got seat 651
+student 63 got seat 651
+Rows in demo_seatings:
+    (651, 97, 61)
+    (651, 97, 63)
+RESULT: 2 students, 1 distinct seat(s)  ->  DOUBLE BOOKING (the bug)
+
+========================================================================
+PART 2: UNIQUE safety net - same race on the real seatings table (P1 partial UNIQUE index)
+========================================================================
+student 61: seat 651 OK (committed)
+student 63: seat 651 REJECTED [23505] duplicate key value violates unique constraint "uniq_active_seat_per_slot"
+RESULT: the database refused the second booking; the loser must retry (no double booking).
+
+========================================================================
+PART 3: FIX - pg_advisory_xact_lock inside seat_first_free(): second session waits, then takes the NEXT seat
+========================================================================
+student 61: got seat 651 after 1.51s
+student 63: got seat 652 after 1.22s
+Active seatings: [(61, 651), (63, 652)]
+RESULT: 2 distinct seats for 2 students - both succeeded, no clash, no error.
+
+========================================================================
+PART 4: WRITE SKEW - 'a hall may hold at most N' rule, READ COMMITTED vs SERIALIZABLE
+========================================================================
+[READ COMMITTED] hall 5 currently has 8 active seatings; rule: at most 9
+student 61: read count=8, inserted + COMMIT ok
+student 63: read count=8, inserted + COMMIT ok
+[READ COMMITTED] active seatings now = 10 (limit 9) -> RULE BROKEN
+[SERIALIZABLE] hall 5 currently has 8 active seatings; rule: at most 9
+student 61: read count=8, COMMIT FAILED [40001] could not serialize access due to read/write dependencies among transactions
+student 63: read count=8, inserted + COMMIT ok
+[SERIALIZABLE] active seatings now = 9 (limit 9) -> rule held
+(A failed SERIALIZABLE transaction is simply retried; the retry now sees the full hall and is refused.)
+
+========================================================================
+PART 5: ISOLATION - READ COMMITTED vs REPEATABLE READ (non-repeatable read)
+========================================================================
+[READ COMMITTED] session A counts ASSIGNED: before = 600, after session B cancelled one and committed = 599
+[REPEATABLE READ] session A counts ASSIGNED: before = 600, after session B cancelled one and committed = 600
+RESULT: READ COMMITTED sees the change inside one transaction; REPEATABLE READ keeps its snapshot.
+
+========================================================================
+PART 6: DEADLOCK - two sessions update the same two seatings in opposite order, then the fix (fixed order)
+========================================================================
+Bad order: T1 locks 64832 then 64833; T2 locks 64833 then 64832
+T1: locked 64832 then 64833 -> COMMIT ok
+T2: ABORTED [40P01] deadlock detected
+Fixed order: both sessions lock the lower seating_id (64832) first, then 64833
+T1: locked 64832 then 64833 -> COMMIT ok
+T2: locked 64832 then 64833 -> COMMIT ok
+RESULT: opposite lock order -> PostgreSQL kills one session (40P01). Same order -> no deadlock.
+
+Test data restored. All six parts finished.
+# P3 done. Evidence: race_demos_output.log
