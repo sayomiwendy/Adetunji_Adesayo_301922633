@@ -1,0 +1,228 @@
+--- Q1: one student's seating history ---
+                                                                    QUERY PLAN                                                                    
+--------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=228.06..228.19 rows=54 width=90) (actual time=0.304..0.308 rows=54 loops=1)
+   Sort Key: a.assigned_at DESC
+   Sort Method: quicksort  Memory: 28kB
+   Buffers: shared hit=11 read=3
+   ->  Hash Join  (cost=65.56..226.51 rows=54 width=90) (actual time=0.183..0.272 rows=54 loops=1)
+         Hash Cond: (a.paper_id = p.paper_id)
+         Buffers: shared hit=8 read=3
+         ->  Hash Join  (cost=30.81..191.61 rows=54 width=56) (actual time=0.084..0.133 rows=54 loops=1)
+               Hash Cond: (a.slot_id = sl.slot_id)
+               Buffers: shared hit=6 read=3
+               ->  Bitmap Heap Scan on seatings a  (cost=4.83..165.50 rows=54 width=20) (actual time=0.039..0.077 rows=54 loops=1)
+                     Recheck Cond: (student_id = 777)
+                     Heap Blocks: exact=5
+                     Buffers: shared hit=5 read=3
+                     ->  Bitmap Index Scan on idx_seat_student_time  (cost=0.00..4.82 rows=54 width=0) (actual time=0.031..0.031 rows=54 loops=1)
+                           Index Cond: (student_id = 777)
+                           Buffers: shared read=3
+               ->  Hash  (cost=17.10..17.10 rows=710 width=44) (actual time=0.031..0.031 rows=108 loops=1)
+                     Buckets: 1024  Batches: 1  Memory Usage: 14kB
+                     Buffers: shared hit=1
+                     ->  Seq Scan on exam_slots sl  (cost=0.00..17.10 rows=710 width=44) (actual time=0.004..0.011 rows=108 loops=1)
+                           Buffers: shared hit=1
+         ->  Hash  (cost=21.00..21.00 rows=1100 width=42) (actual time=0.086..0.086 rows=324 loops=1)
+               Buckets: 2048  Batches: 1  Memory Usage: 30kB
+               Buffers: shared hit=2
+               ->  Seq Scan on exam_papers p  (cost=0.00..21.00 rows=1100 width=42) (actual time=0.006..0.033 rows=324 loops=1)
+                     Buffers: shared hit=2
+ Planning:
+   Buffers: shared hit=391 read=3
+ Planning Time: 0.925 ms
+ Execution Time: 0.367 ms
+(31 rows)
+
+--- Q2: seat usage by status for ONE exam slot ---
+                                                                          QUERY PLAN                                                                          
+--------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=593.38..593.39 rows=3 width=12) (actual time=1.137..1.138 rows=2 loops=1)
+   Sort Key: a.status
+   Sort Method: quicksort  Memory: 25kB
+   Buffers: shared hit=367 read=2
+   InitPlan 2 (returns $1)
+     ->  Result  (cost=0.42..0.43 rows=1 width=4) (actual time=0.009..0.010 rows=1 loops=1)
+           Buffers: shared hit=2
+           InitPlan 1 (returns $0)
+             ->  Limit  (cost=0.15..0.42 rows=1 width=4) (actual time=0.007..0.008 rows=1 loops=1)
+                   Buffers: shared hit=2
+                   ->  Index Scan Backward using exam_slots_pkey on exam_slots  (cost=0.15..64.04 rows=235 width=4) (actual time=0.007..0.007 rows=1 loops=1)
+                         Index Cond: (slot_id IS NOT NULL)
+                         Filter: (slot_date < CURRENT_DATE)
+                         Rows Removed by Filter: 12
+                         Buffers: shared hit=2
+   ->  HashAggregate  (cost=592.89..592.92 rows=3 width=12) (actual time=1.119..1.120 rows=2 loops=1)
+         Group Key: a.status
+         Batches: 1  Memory Usage: 24kB
+         Buffers: shared hit=364 read=2
+         ->  Bitmap Heap Scan on seatings a  (cost=8.94..589.89 rows=600 width=4) (actual time=0.097..1.013 rows=600 loops=1)
+               Recheck Cond: (slot_id = $1)
+               Heap Blocks: exact=362
+               Buffers: shared hit=364 read=2
+               ->  Bitmap Index Scan on idx_seat_slot  (cost=0.00..8.79 rows=600 width=0) (actual time=0.059..0.059 rows=600 loops=1)
+                     Index Cond: (slot_id = $1)
+                     Buffers: shared hit=2 read=2
+ Planning:
+   Buffers: shared hit=18
+ Planning Time: 0.150 ms
+ Execution Time: 1.179 ms
+(30 rows)
+
+--- Q3: absentees for one course across all semesters ---
+                                                                             QUERY PLAN                                                                             
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=179.04..179.06 rows=10 width=358) (actual time=0.321..0.324 rows=49 loops=1)
+   Sort Key: sl.semester, st.matric_number
+   Sort Method: quicksort  Memory: 28kB
+   Buffers: shared hit=306 read=10
+   ->  Nested Loop  (cost=9.10..178.87 rows=10 width=358) (actual time=0.071..0.302 rows=49 loops=1)
+         Buffers: shared hit=306 read=10
+         ->  Nested Loop  (cost=8.95..176.92 rows=10 width=320) (actual time=0.066..0.263 rows=49 loops=1)
+               Buffers: shared hit=208 read=10
+               ->  Nested Loop  (cost=8.68..173.51 rows=10 width=8) (actual time=0.047..0.166 rows=49 loops=1)
+                     Buffers: shared hit=61 read=10
+                     ->  Bitmap Heap Scan on exam_papers p  (cost=4.32..13.79 rows=6 width=4) (actual time=0.015..0.017 rows=9 loops=1)
+                           Recheck Cond: ((course_code)::text = 'CSC 201'::text)
+                           Heap Blocks: exact=2
+                           Buffers: shared hit=4
+                           ->  Bitmap Index Scan on exam_papers_course_code_slot_id_key  (cost=0.00..4.32 rows=6 width=0) (actual time=0.010..0.011 rows=9 loops=1)
+                                 Index Cond: ((course_code)::text = 'CSC 201'::text)
+                                 Buffers: shared hit=2
+                     ->  Bitmap Heap Scan on seatings a  (cost=4.35..26.56 rows=6 width=12) (actual time=0.011..0.015 rows=5 loops=9)
+                           Recheck Cond: ((p.paper_id = paper_id) AND ((status)::text = 'ABSENT'::text))
+                           Heap Blocks: exact=49
+                           Buffers: shared hit=57 read=10
+                           ->  Bitmap Index Scan on idx_seat_paper  (cost=0.00..4.35 rows=6 width=0) (actual time=0.009..0.009 rows=5 loops=9)
+                                 Index Cond: ((paper_id = p.paper_id) AND ((status)::text = 'ABSENT'::text))
+                                 Buffers: shared hit=8 read=10
+               ->  Index Scan using students_pkey on students st  (cost=0.27..0.34 rows=1 width=320) (actual time=0.002..0.002 rows=1 loops=49)
+                     Index Cond: (student_id = a.student_id)
+                     Buffers: shared hit=147
+         ->  Index Scan using exam_slots_pkey on exam_slots sl  (cost=0.15..0.19 rows=1 width=46) (actual time=0.001..0.001 rows=1 loops=49)
+               Index Cond: (slot_id = a.slot_id)
+               Buffers: shared hit=98
+ Planning:
+   Buffers: shared hit=56
+ Planning Time: 0.366 ms
+ Execution Time: 0.352 ms
+(34 rows)
+
+--- Q4: roster of one hall for one slot ---
+                                                                             QUERY PLAN                                                                             
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=615.04..615.05 rows=3 width=392) (actual time=1.207..1.221 rows=300 loops=1)
+   Sort Key: s.seat_code
+   Sort Method: quicksort  Memory: 43kB
+   Buffers: shared hit=1874
+   InitPlan 1 (returns $0)
+     ->  Index Scan using exam_halls_hall_name_key on exam_halls  (cost=0.14..8.16 rows=1 width=4) (actual time=0.007..0.007 rows=1 loops=1)
+           Index Cond: ((hall_name)::text = 'Main Auditorium'::text)
+           Buffers: shared hit=2
+   InitPlan 3 (returns $2)
+     ->  Result  (cost=0.42..0.43 rows=1 width=4) (actual time=0.022..0.022 rows=1 loops=1)
+           Buffers: shared hit=2
+           InitPlan 2 (returns $1)
+             ->  Limit  (cost=0.15..0.42 rows=1 width=4) (actual time=0.018..0.019 rows=1 loops=1)
+                   Buffers: shared hit=2
+                   ->  Index Scan Backward using exam_slots_pkey on exam_slots  (cost=0.15..64.04 rows=235 width=4) (actual time=0.018..0.018 rows=1 loops=1)
+                         Index Cond: (slot_id IS NOT NULL)
+                         Filter: (slot_date < CURRENT_DATE)
+                         Rows Removed by Filter: 12
+                         Buffers: shared hit=2
+   ->  Nested Loop  (cost=22.21..606.42 rows=3 width=392) (actual time=0.350..1.115 rows=300 loops=1)
+         Buffers: shared hit=1874
+         ->  Nested Loop  (cost=22.06..605.67 rows=3 width=358) (actual time=0.344..0.893 rows=300 loops=1)
+               Buffers: shared hit=1274
+               ->  Hash Join  (cost=21.79..604.33 rows=3 width=46) (actual time=0.338..0.603 rows=300 loops=1)
+                     Hash Cond: (a.seat_id = s.seat_id)
+                     Buffers: shared hit=374
+                     ->  Bitmap Heap Scan on seatings a  (cost=8.94..589.89 rows=600 width=12) (actual time=0.120..0.422 rows=600 loops=1)
+                           Recheck Cond: (slot_id = $2)
+                           Heap Blocks: exact=362
+                           Buffers: shared hit=366
+                           ->  Bitmap Index Scan on idx_seat_slot  (cost=0.00..8.79 rows=600 width=0) (actual time=0.081..0.081 rows=600 loops=1)
+                                 Index Cond: (slot_id = $2)
+                                 Buffers: shared hit=4
+                     ->  Hash  (cost=12.79..12.79 rows=5 width=42) (actual time=0.089..0.089 rows=300 loops=1)
+                           Buckets: 1024  Batches: 1  Memory Usage: 21kB
+                           Buffers: shared hit=8
+                           ->  Bitmap Heap Scan on seats s  (cost=4.32..12.79 rows=5 width=42) (actual time=0.033..0.058 rows=300 loops=1)
+                                 Recheck Cond: (hall_id = $0)
+                                 Heap Blocks: exact=3
+                                 Buffers: shared hit=8
+                                 ->  Bitmap Index Scan on seats_hall_id_seat_code_key  (cost=0.00..4.31 rows=5 width=0) (actual time=0.027..0.027 rows=300 loops=1)
+                                       Index Cond: (hall_id = $0)
+                                       Buffers: shared hit=5
+               ->  Index Scan using students_pkey on students st  (cost=0.27..0.45 rows=1 width=320) (actual time=0.001..0.001 rows=1 loops=300)
+                     Index Cond: (student_id = a.student_id)
+                     Buffers: shared hit=900
+         ->  Index Scan using exam_papers_paper_id_slot_id_key on exam_papers p  (cost=0.15..0.25 rows=1 width=42) (actual time=0.000..0.000 rows=1 loops=300)
+               Index Cond: (paper_id = a.paper_id)
+               Buffers: shared hit=600
+ Planning:
+   Buffers: shared hit=80
+ Planning Time: 0.451 ms
+ Execution Time: 1.266 ms
+(53 rows)
+
+--- Q5 (full scan on purpose): seatings per hall per status ---
+                                                              QUERY PLAN                                                               
+---------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=2107.84..2109.26 rows=570 width=190) (actual time=35.882..35.885 rows=15 loops=1)
+   Sort Key: h.hall_name, a.status
+   Sort Method: quicksort  Memory: 25kB
+   Buffers: shared hit=555
+   ->  HashAggregate  (cost=2076.05..2081.75 rows=570 width=190) (actual time=35.861..35.867 rows=15 loops=1)
+         Group Key: h.hall_name, a.status
+         Batches: 1  Memory Usage: 49kB
+         Buffers: shared hit=555
+         ->  Hash Join  (cost=48.57..1590.05 rows=64800 width=182) (actual time=0.180..24.670 rows=64800 loops=1)
+               Hash Cond: (s.hall_id = h.hall_id)
+               Buffers: shared hit=555
+               ->  Hash Join  (cost=34.30..1402.07 rows=64800 width=8) (actual time=0.171..16.058 rows=64800 loops=1)
+                     Hash Cond: (a.seat_id = s.seat_id)
+                     Buffers: shared hit=554
+                     ->  Seq Scan on seatings a  (cost=0.00..1197.00 rows=64800 width=8) (actual time=0.002..4.483 rows=64800 loops=1)
+                           Buffers: shared hit=549
+                     ->  Hash  (cost=20.80..20.80 rows=1080 width=8) (actual time=0.166..0.166 rows=860 loops=1)
+                           Buckets: 2048  Batches: 1  Memory Usage: 50kB
+                           Buffers: shared hit=5
+                           ->  Seq Scan on seats s  (cost=0.00..20.80 rows=1080 width=8) (actual time=0.003..0.085 rows=860 loops=1)
+                                 Buffers: shared hit=5
+               ->  Hash  (cost=11.90..11.90 rows=190 width=182) (actual time=0.006..0.007 rows=5 loops=1)
+                     Buckets: 1024  Batches: 1  Memory Usage: 9kB
+                     Buffers: shared hit=1
+                     ->  Seq Scan on exam_halls h  (cost=0.00..11.90 rows=190 width=182) (actual time=0.003..0.004 rows=5 loops=1)
+                           Buffers: shared hit=1
+ Planning:
+   Buffers: shared hit=2
+ Planning Time: 0.133 ms
+ Execution Time: 35.911 ms
+(30 rows)
+
+--- Q6 (full scan on purpose): attendance rate per department ---
+                                                             QUERY PLAN                                                              
+-------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=2210.99..2211.44 rows=180 width=170) (actual time=38.973..38.975 rows=6 loops=1)
+   Sort Key: st.department
+   Sort Method: quicksort  Memory: 25kB
+   Buffers: shared hit=567
+   ->  HashAggregate  (cost=2199.75..2204.25 rows=180 width=170) (actual time=38.958..38.965 rows=6 loops=1)
+         Group Key: st.department
+         Batches: 1  Memory Usage: 40kB
+         Buffers: shared hit=567
+         ->  Hash Join  (cost=22.05..1389.75 rows=64800 width=142) (actual time=0.288..21.774 rows=64800 loops=1)
+               Hash Cond: (a.student_id = st.student_id)
+               Buffers: shared hit=567
+               ->  Seq Scan on seatings a  (cost=0.00..1197.00 rows=64800 width=8) (actual time=0.004..6.013 rows=64800 loops=1)
+                     Buffers: shared hit=549
+               ->  Hash  (cost=19.80..19.80 rows=180 width=142) (actual time=0.280..0.281 rows=1200 loops=1)
+                     Buckets: 2048 (originally 1024)  Batches: 1 (originally 1)  Memory Usage: 79kB
+                     Buffers: shared hit=18
+                     ->  Seq Scan on students st  (cost=0.00..19.80 rows=180 width=142) (actual time=0.003..0.118 rows=1200 loops=1)
+                           Buffers: shared hit=18
+ Planning Time: 0.137 ms
+ Execution Time: 39.006 ms
+(20 rows)
+

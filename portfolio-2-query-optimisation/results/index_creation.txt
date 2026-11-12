@@ -1,0 +1,14 @@
+CREATE INDEX
+CREATE INDEX
+CREATE INDEX
+ANALYZE
+          indexname           
+------------------------------
+ idx_seat_paper
+ idx_seat_slot
+ idx_seat_student_time
+ seatings_pkey
+ uniq_active_seat_per_slot
+ uniq_active_student_per_slot
+(6 rows)
+

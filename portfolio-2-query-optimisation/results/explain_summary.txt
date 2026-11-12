@@ -1,0 +1,27 @@
+=== BEFORE indexes ===
+--- Q1: one student's seating history ---
+    4.852 ms | Seq Scan on seatings; Seq Scan on exam_papers
+--- Q2: seat usage by status for ONE exam slot ---
+    5.021 ms | Seq Scan on seatings
+--- Q3: absentees for one course across all semesters ---
+    4.025 ms | Seq Scan on seatings; Bitmap Heap Scan on exam_papers; Index Scan on exam_papers
+--- Q4: roster of one hall for one slot ---
+    4.985 ms | Seq Scan on seatings
+--- Q5 (full scan on purpose): seatings per hall per status ---
+    33.749 ms | Seq Scan on seatings
+--- Q6 (full scan on purpose): attendance rate per department ---
+    25.290 ms | Seq Scan on seatings
+
+=== AFTER indexes ===
+--- Q1: one student's seating history ---
+    0.367 ms | Bitmap Heap Scan on seatings; Seq Scan on exam_papers
+--- Q2: seat usage by status for ONE exam slot ---
+    1.179 ms | Bitmap Heap Scan on seatings
+--- Q3: absentees for one course across all semesters ---
+    0.352 ms | Bitmap Heap Scan on exam_papers; Index Scan on exam_papers; Bitmap Heap Scan on seatings
+--- Q4: roster of one hall for one slot ---
+    1.266 ms | Bitmap Heap Scan on seatings
+--- Q5 (full scan on purpose): seatings per hall per status ---
+    35.911 ms | Seq Scan on seatings
+--- Q6 (full scan on purpose): attendance rate per department ---
+    39.006 ms | Seq Scan on seatings
